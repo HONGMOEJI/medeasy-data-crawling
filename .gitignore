@@ -1,0 +1,10 @@
+# 환경 변수 파일
+.env
+
+# 데이터 파일 (원본 및 전처리된 데이터)
+data/raw/*
+data/processed/*
+
+# Python 가상환경
+.venv/
+__pycache__/
