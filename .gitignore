@@ -8,3 +8,6 @@ data/processed/*
 # Python 가상환경
 .venv/
 __pycache__/
+
+# log 파일
+data/logs/*

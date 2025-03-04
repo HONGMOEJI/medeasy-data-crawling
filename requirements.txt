@@ -2,3 +2,8 @@ requests
 pandas
 python-dotenv
 pyyaml
+beautifulsoup4
+aiohttp
+aiodns
+charset-normalizer  # cchardet 대신 사용
+tqdm
