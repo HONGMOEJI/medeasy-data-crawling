@@ -26,7 +26,7 @@ PROCESSED_OUTPUT_FILE = os.path.join(ROOT_DIR, "data", "processed", "drug_approv
 # 필요한 필드 목록
 REQUIRED_FIELDS = [
     "ITEM_SEQ", "ITEM_NAME", "ENTP_NAME", "ETC_OTC_CODE", "ETC_OTC_NAME", "CHART", 
-    "EE_DOC_DATA", "UD_DOC_DATA", "NB_DOC_DATA", "STORAGE_METHOD", "VALID_TERM"
+    "EE_DOC_DATA", "UD_DOC_DATA", "NB_DOC_DATA", "STORAGE_METHOD", "VALID_TERM", "CANCEL_DATE"
 ]
 
 def parse_xml_doc(xml_string):
@@ -360,6 +360,7 @@ def extract_text_from_broken_xml(xml_string):
 def fetch_drug_approval_data():
     """
     의약품 허가 정보 데이터를 API에서 가져오고 XML 문서를 파싱합니다.
+    허가 취소된 의약품과 수출용 의약품을 건너뜁니다.
     """
     page_no = 1
     page_size = 100
@@ -367,6 +368,10 @@ def fetch_drug_approval_data():
     max_retries = 3  # API 요청 실패 시 최대 재시도 횟수
     last_page_items = -1  # 이전 페이지의 항목 수 (초기값은 -1로 설정)
     seen_item_sequences = set()  # 이미 수집한 아이템 일련번호 추적
+    
+    # 필터링 카운터 초기화
+    filtered_canceled_count = 0
+    filtered_export_count = 0
 
     while True:
         params = {
@@ -425,7 +430,7 @@ def fetch_drug_approval_data():
                 if "header" in data and "body" in data:
                     if "items" not in data["body"] or not data["body"]["items"]:
                         print(f"📢 페이지 {page_no}에서 항목이 없습니다. 데이터 수집을 종료합니다.")
-                        return total_data  # 즉시 함수 종료하여 루프 탈출
+                        break
                     
                     items = data["body"]["items"]
                     total_count = data["body"].get("totalCount", 0)
@@ -433,7 +438,7 @@ def fetch_drug_approval_data():
                 elif "response" in data and "body" in data["response"]:
                     if "items" not in data["response"]["body"] or not data["response"]["body"]["items"]:
                         print(f"📢 페이지 {page_no}에서 항목이 없습니다. 데이터 수집을 종료합니다.")
-                        return total_data  # 즉시 함수 종료하여 루프 탈출
+                        break
                     
                     items = data["response"]["body"]["items"]
                     total_count = data["response"]["body"].get("totalCount", 0)
@@ -459,7 +464,7 @@ def fetch_drug_approval_data():
                     # 이미 처리한 아이템인지 확인
                     if current_sequences_set.issubset(seen_item_sequences):
                         print(f"🛑 페이지 {page_no}의 모든 항목이 이미 처리되었습니다. 데이터 수집을 종료합니다.")
-                        return total_data  # 즉시 함수 종료하여 루프 탈출
+                        break
                 
                 # 필요한 필드만 필터링하고 XML 파싱
                 processed_items = []
@@ -470,6 +475,19 @@ def fetch_drug_approval_data():
                     
                     # 이미 처리한 아이템 건너뛰기
                     if item_seq in seen_item_sequences:
+                        continue
+                    
+                    # 허가 취소된 의약품 필터링
+                    if item.get("CANCEL_DATE"):
+                        print(f"📢 허가 취소된 의약품 제외: {item.get('ITEM_NAME', '이름 없음')} (취소일: {item['CANCEL_DATE']})")
+                        filtered_canceled_count += 1
+                        continue
+                    
+                    # 수출용 의약품 필터링
+                    item_name = item.get("ITEM_NAME", "")
+                    if "(수출용)" in item_name:
+                        print(f"📢 수출용 의약품 제외: {item_name}")
+                        filtered_export_count += 1
                         continue
                     
                     seen_item_sequences.add(item_seq)
@@ -505,11 +523,12 @@ def fetch_drug_approval_data():
                 # 새로운 아이템이 없으면 종료
                 if new_item_count == 0:
                     print(f"📢 페이지 {page_no}에서 새로운 항목이 없습니다. 데이터 수집을 종료합니다.")
-                    return total_data  # 즉시 함수 종료하여 루프 탈출
+                    break
                 
                 # 데이터 추가
                 total_data.extend(processed_items)
                 print(f"✅ 페이지 {page_no}에서 {len(processed_items)}개 레코드를 가져와 처리했습니다.")
+                print(f"📊 현재까지 필터링된 의약품: 허가 취소 {filtered_canceled_count}개, 수출용 {filtered_export_count}개")
                 
                 # 마지막 페이지 도달 확인
                 if total_count > 0:
@@ -518,12 +537,12 @@ def fetch_drug_approval_data():
                     
                     if page_no >= estimated_pages:
                         print(f"📢 마지막 페이지에 도달했습니다. 데이터 수집을 종료합니다.")
-                        return total_data  # 즉시 함수 종료하여 루프 탈출
+                        break
                 
                 # 페이지 크기보다 적은 데이터가 반환되면 마지막 페이지로 간주
                 if len(items) < page_size:
                     print(f"📢 페이지 크기보다 적은 항목을 받았습니다. 마지막 페이지로 추정됩니다.")
-                    return total_data  # 즉시 함수 종료하여 루프 탈출
+                    break
                 
                 # 성공 표시
                 success = True
@@ -550,14 +569,18 @@ def fetch_drug_approval_data():
         # 성공하지 못했으면 종료
         if not success:
             print(f"⚠️ 페이지 {page_no} 처리 실패. 데이터 수집을 중단합니다.")
-            return total_data
+            break
         
         # 다음 페이지로 이동
         page_no += 1
+    
+    print(f"✅ 데이터 수집 완료. 총 {len(total_data)}개 항목 수집, 필터링된 항목: 허가 취소 {filtered_canceled_count}개, 수출용 {filtered_export_count}개")
+    return total_data
 
 def process_and_save_data(data, raw_file, processed_file):
     """
     데이터를 처리하고 저장합니다.
+    이미 fetch_drug_approval_data에서 필터링을 했지만, 안전을 위해 한번 더 필터링합니다.
     """
     # 디렉토리 생성
     os.makedirs(os.path.dirname(raw_file), exist_ok=True)
@@ -568,9 +591,31 @@ def process_and_save_data(data, raw_file, processed_file):
     with open(raw_file, "w", encoding="utf-8") as raw_json_file:
         json.dump(data, raw_json_file, ensure_ascii=False, indent=2)
     
+    # 한번 더 필터링 적용 (안전 확인)
+    filtered_data = []
+    filtered_canceled_count = 0
+    filtered_export_count = 0
+    
+    for item in data:
+        # 허가 취소된 의약품 필터링
+        if item.get("CANCEL_DATE"):
+            filtered_canceled_count += 1
+            continue
+        
+        # 수출용 의약품 필터링
+        item_name = item.get("ITEM_NAME", "")
+        if "(수출용)" in item_name:
+            filtered_export_count += 1
+            continue
+        
+        filtered_data.append(item)
+    
+    if filtered_canceled_count > 0 or filtered_export_count > 0:
+        print(f"⚠️ 추가 필터링: 허가 취소 의약품 {filtered_canceled_count}개, 수출용 의약품 {filtered_export_count}개가 제외되었습니다.")
+    
     # 텍스트 형식으로 추출한 데이터 생성
     text_data = []
-    for item in data:
+    for item in filtered_data:
         # 기본 필드 추출
         text_item = {
             'ITEM_SEQ': item.get('ITEM_SEQ', ''),
@@ -624,7 +669,7 @@ def process_and_save_data(data, raw_file, processed_file):
     with open(processed_file, "w", encoding="utf-8") as processed_json_file:
         json.dump(text_data, processed_json_file, ensure_ascii=False, indent=2)
     
-    print(f"✅ 데이터 처리 완료. 전체 레코드 수: {len(data)}, 유효 레코드 수: {len(text_data)}")
+    print(f"✅ 데이터 처리 완료. 원본 레코드 수: {len(data)}, 필터링 후 레코드 수: {len(filtered_data)}, 최종 유효 레코드 수: {len(text_data)}")
     
     # 샘플 데이터 출력
     if text_data:
@@ -653,7 +698,7 @@ def process_and_save_data(data, raw_file, processed_file):
 
     # 에러 보고서 생성 (선택적)
     error_records = []
-    for item in data:
+    for item in filtered_data:
         error_fields = []
         
         # XML 파싱 오류 확인
